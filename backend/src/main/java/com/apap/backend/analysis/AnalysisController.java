@@ -14,6 +14,7 @@ import com.apap.backend.video.VideoSourceRepository;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,14 +22,19 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestClient;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/analysis")
 public class AnalysisController {
+
+    private static final Set<DetectionEventType> ABNORMAL_TYPES =
+            Set.of(DetectionEventType.FALL, DetectionEventType.INTRUSION, DetectionEventType.ANOMALOUS);
 
     private final AnalysisJobRepository analysisJobRepository;
     private final ScenarioRepository scenarioRepository;
@@ -36,6 +42,8 @@ public class AnalysisController {
     private final DetectionEventRepository detectionEventRepository;
     private final AlertRepository alertRepository;
     private final String aiServerUrl;
+    private final String baseUrl;
+    private final RestClient restClient;
 
     public AnalysisController(
             AnalysisJobRepository analysisJobRepository,
@@ -43,7 +51,8 @@ public class AnalysisController {
             VideoSourceRepository videoSourceRepository,
             DetectionEventRepository detectionEventRepository,
             AlertRepository alertRepository,
-            @Value("${apap.ai-server-url}") String aiServerUrl
+            @Value("${apap.ai-server-url}") String aiServerUrl,
+            @Value("${apap.base-url}") String baseUrl
     ) {
         this.analysisJobRepository = analysisJobRepository;
         this.scenarioRepository = scenarioRepository;
@@ -51,10 +60,12 @@ public class AnalysisController {
         this.detectionEventRepository = detectionEventRepository;
         this.alertRepository = alertRepository;
         this.aiServerUrl = aiServerUrl;
+        this.baseUrl = baseUrl;
+        this.restClient = RestClient.create();
     }
 
     @PostMapping("/jobs")
-    public ApiResponse<Map<String, Object>> createJob(@Valid @RequestBody AnalysisJobRequest request) {
+    public ApiResponse<AnalysisJobResponse> createJob(@Valid @RequestBody AnalysisJobRequest request) {
         Scenario scenario = scenarioRepository.findById(request.scenarioId())
                 .orElseThrow(() -> new EntityNotFoundException("시나리오를 찾을 수 없습니다."));
         VideoSource videoSource = videoSourceRepository.findById(request.videoSourceId())
@@ -64,7 +75,6 @@ public class AnalysisController {
 
         Map<String, Object> aiRequestPayload = Map.of(
                 "job_id", job.getId(),
-                "ai_server_url", aiServerUrl,
                 "scenario", Map.of(
                         "id", scenario.getId(),
                         "name", scenario.getName(),
@@ -75,13 +85,22 @@ public class AnalysisController {
                         "id", videoSource.getId(),
                         "source_url", videoSource.getSourceUrl()
                 ),
-                "callback_url", "/api/analysis/callback"
+                "callback_url", baseUrl + "/api/analysis/callback"
         );
 
-        return ApiResponse.ok(Map.of(
-                "job", AnalysisJobResponse.from(job),
-                "aiRequestPayload", aiRequestPayload
-        ), "AI 서버로 보낼 분석 요청 payload가 생성되었습니다.");
+        try {
+            restClient.post()
+                    .uri(aiServerUrl + "/analyze")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(aiRequestPayload)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (Exception e) {
+            job.complete(AnalysisJobStatus.FAILED, "AI 서버 호출 실패: " + e.getMessage());
+            analysisJobRepository.save(job);
+        }
+
+        return ApiResponse.ok(AnalysisJobResponse.from(job), "분석 요청이 접수되었습니다.");
     }
 
     @GetMapping("/jobs")
@@ -119,12 +138,14 @@ public class AnalysisController {
                     eventRequest.resultJson()
             ));
 
-            if (eventRequest.eventType() == DetectionEventType.ABNORMAL) {
-                alertRepository.save(new Alert(
-                        event,
-                        job.getScenario().getUser(),
-                        "비정상 행동이 감지되었습니다. severity=" + eventRequest.severity()
-                ));
+            if (ABNORMAL_TYPES.contains(eventRequest.eventType())) {
+                String message = switch (eventRequest.eventType()) {
+                    case FALL -> "낙상이 감지되었습니다. severity=" + eventRequest.severity();
+                    case INTRUSION -> "침입이 감지되었습니다. severity=" + eventRequest.severity();
+                    case ANOMALOUS -> "이상행동이 감지되었습니다. severity=" + eventRequest.severity();
+                    default -> "비정상 행동이 감지되었습니다. severity=" + eventRequest.severity();
+                };
+                alertRepository.save(new Alert(event, job.getScenario().getUser(), message));
             }
         }
 

@@ -12,6 +12,9 @@ apap.db
 uploads/*
 !uploads/.gitkeep
 
+# FastAPI app/ - AI 서버(ai-server:8000)와 역할 중복, 팀 프로젝트에서는 backend/ 사용
+app/
+
 # Java / Maven
 target/
 *.class
