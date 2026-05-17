@@ -1,0 +1,91 @@
+    ### 0. Health check
+GET http://localhost:8080/api/health
+
+### 1. Signup
+POST http://localhost:8080/api/auth/signup
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "1234",
+  "name": "준래"
+}
+
+### 2. Login
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "1234"
+}
+
+### 3. Create scenario
+POST http://localhost:8080/api/scenarios
+Content-Type: application/json
+
+{
+  "userId": 1,
+  "name": "무인매장 절도 의심",
+  "targetLocation": "무인매장",
+  "behaviorText": "물건을 가방에 넣고 결제 없이 출구로 이동",
+  "conditionsJson": "{\"handNearBag\": true, \"paymentDetected\": false}",
+  "threshold": 0.8,
+  "active": true
+}
+
+### 4. List scenarios
+GET http://localhost:8080/api/scenarios?userId=1
+
+### 5. Create video source
+POST http://localhost:8080/api/videos
+Content-Type: application/json
+
+{
+  "userId": 1,
+  "type": "UPLOAD",
+  "name": "sample-video",
+  "sourceUrl": "uploads/sample.mp4"
+}
+
+### 6. List video sources
+GET http://localhost:8080/api/videos?userId=1
+
+### 7. Create analysis job
+POST http://localhost:8080/api/analysis/jobs
+Content-Type: application/json
+
+{
+  "scenarioId": 1,
+  "videoSourceId": 1
+}
+
+### 8. AI callback
+POST http://localhost:8080/api/analysis/callback
+Content-Type: application/json
+
+{
+  "jobId": 1,
+  "status": "DONE",
+  "errorMessage": null,
+  "events": [
+    {
+      "eventType": "ABNORMAL",
+      "severity": "HIGH",
+      "confidenceScore": 0.91,
+      "detectedAt": "2026-07-01T12:10:00",
+      "snapshotUrl": "uploads/snapshot-1.jpg",
+      "clipUrl": "uploads/clip-1.mp4",
+      "resultJson": "{\"reason\": \"주변 탐색과 가방 접근이 동시에 감지됨\"}"
+    }
+  ]
+}
+
+### 9. List events
+GET http://localhost:8080/api/events?userId=1
+
+### 10. List alerts
+GET http://localhost:8080/api/alerts?userId=1
+
+### 11. Dashboard summary
+GET http://localhost:8080/api/dashboard/summary?userId=1
