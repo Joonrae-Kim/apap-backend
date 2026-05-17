@@ -8,4 +8,6 @@ public interface DetectionEventRepository extends JpaRepository<DetectionEvent, 
     List<DetectionEvent> findAllByScenarioUserIdOrderByDetectedAtDesc(Long userId);
 
     long countByScenarioUserIdAndEventType(Long userId, DetectionEventType eventType);
+
+    long countByScenarioUserIdAndEventTypeIn(Long userId, java.util.Collection<DetectionEventType> eventTypes);
 }

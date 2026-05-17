@@ -43,7 +43,7 @@ public class DashboardController {
                 scenarioRepository.findAllByUserIdOrderByIdDesc(userId).size(),
                 videoSourceRepository.findAllByUserIdOrderByIdDesc(userId).size(),
                 analysisJobRepository.findAllByScenarioUserIdOrderByIdDesc(userId).size(),
-                detectionEventRepository.countByScenarioUserIdAndEventType(userId, DetectionEventType.ABNORMAL),
+                detectionEventRepository.countByScenarioUserIdAndEventTypeIn(userId, java.util.List.of(DetectionEventType.FALL, DetectionEventType.INTRUSION, DetectionEventType.ANOMALOUS)),
                 alertRepository.countByReceiverIdAndStatusNot(userId, AlertStatus.READ)
         ));
     }
