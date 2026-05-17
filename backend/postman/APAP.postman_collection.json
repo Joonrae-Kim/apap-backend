@@ -379,8 +379,8 @@
               "script": {
                 "exec": [
                   "const json = pm.response.json();",
-                  "if (json.data && json.data.job && json.data.job.id) {",
-                  "  pm.collectionVariables.set('jobId', json.data.job.id);",
+                  "if (json.data && json.data.id) {",
+                  "  pm.collectionVariables.set('jobId', json.data.id);",
                   "}"
                 ],
                 "type": "text/javascript"
@@ -467,7 +467,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"jobId\": {{jobId}},\n  \"status\": \"DONE\",\n  \"errorMessage\": null,\n  \"events\": [\n    {\n      \"eventType\": \"ABNORMAL\",\n      \"severity\": \"HIGH\",\n      \"confidenceScore\": 0.91,\n      \"detectedAt\": \"2026-07-01T12:10:00\",\n      \"snapshotUrl\": \"uploads/snapshot-1.jpg\",\n      \"clipUrl\": \"uploads/clip-1.mp4\",\n      \"resultJson\": \"{\\\"reason\\\": \\\"주변 탐색과 가방 접근이 동시에 감지됨\\\"}\"\n    }\n  ]\n}"
+              "raw": "{\n  \"jobId\": {{jobId}},\n  \"status\": \"DONE\",\n  \"errorMessage\": null,\n  \"events\": [\n    {\n      \"eventType\": \"FALL\",\n      \"severity\": \"HIGH\",\n      \"confidenceScore\": 0.91,\n      \"detectedAt\": \"2026-07-01T12:10:00\",\n      \"snapshotUrl\": \"uploads/snapshot-1.jpg\",\n      \"clipUrl\": \"uploads/clip-1.mp4\",\n      \"resultJson\": \"{\\\"reason\\\": \\\"주변 탐색과 가방 접근이 동시에 감지됨\\\"}\"\n    }\n  ]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/analysis/callback",
