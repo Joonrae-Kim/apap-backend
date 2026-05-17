@@ -25,16 +25,13 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestClient;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 @RestController
 @RequestMapping("/api/analysis")
 public class AnalysisController {
-
-    private static final Set<DetectionEventType> ABNORMAL_TYPES =
-            Set.of(DetectionEventType.FALL, DetectionEventType.INTRUSION, DetectionEventType.ANOMALOUS);
 
     private final AnalysisJobRepository analysisJobRepository;
     private final ScenarioRepository scenarioRepository;
@@ -42,7 +39,6 @@ public class AnalysisController {
     private final DetectionEventRepository detectionEventRepository;
     private final AlertRepository alertRepository;
     private final String aiServerUrl;
-    private final String baseUrl;
     private final RestClient restClient;
 
     public AnalysisController(
@@ -51,8 +47,7 @@ public class AnalysisController {
             VideoSourceRepository videoSourceRepository,
             DetectionEventRepository detectionEventRepository,
             AlertRepository alertRepository,
-            @Value("${apap.ai-server-url}") String aiServerUrl,
-            @Value("${apap.base-url}") String baseUrl
+            @Value("${apap.ai-server-url}") String aiServerUrl
     ) {
         this.analysisJobRepository = analysisJobRepository;
         this.scenarioRepository = scenarioRepository;
@@ -60,7 +55,6 @@ public class AnalysisController {
         this.detectionEventRepository = detectionEventRepository;
         this.alertRepository = alertRepository;
         this.aiServerUrl = aiServerUrl;
-        this.baseUrl = baseUrl;
         this.restClient = RestClient.create();
     }
 
@@ -73,34 +67,51 @@ public class AnalysisController {
 
         AnalysisJob job = analysisJobRepository.save(new AnalysisJob(scenario, videoSource));
 
-        Map<String, Object> aiRequestPayload = Map.of(
-                "job_id", job.getId(),
-                "scenario", Map.of(
-                        "id", scenario.getId(),
-                        "name", scenario.getName(),
-                        "behavior_text", scenario.getBehaviorText(),
-                        "threshold", scenario.getThreshold()
-                ),
-                "video", Map.of(
-                        "id", videoSource.getId(),
-                        "source_url", videoSource.getSourceUrl()
-                ),
-                "callback_url", baseUrl + "/api/analysis/callback"
-        );
-
+        // AI 서버에 동기 호출: POST /predict/video
         try {
-            restClient.post()
-                    .uri(aiServerUrl + "/analyze")
+            Map<String, Object> aiRequest = new HashMap<>();
+            aiRequest.put("video_path", videoSource.getSourceUrl());
+
+            AiPredictionResponse aiResponse = restClient.post()
+                    .uri(aiServerUrl + "/predict/video")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(aiRequestPayload)
+                    .body(aiRequest)
                     .retrieve()
-                    .toBodilessEntity();
+                    .body(AiPredictionResponse.class);
+
+            if (aiResponse != null && "success".equals(aiResponse.status())) {
+                DetectionEventType eventType = "abnormal".equalsIgnoreCase(aiResponse.prediction())
+                        ? DetectionEventType.ABNORMAL
+                        : DetectionEventType.NORMAL;
+
+                Severity severity = resolveSeverity(aiResponse.confidence());
+
+                DetectionEvent event = detectionEventRepository.save(new DetectionEvent(
+                        job, eventType, severity,
+                        aiResponse.confidence(),
+                        LocalDateTime.now(),
+                        null, null, null
+                ));
+
+                if (eventType == DetectionEventType.ABNORMAL) {
+                    alertRepository.save(new Alert(
+                            event,
+                            scenario.getUser(),
+                            "비정상 행동이 감지되었습니다. confidence=" + String.format("%.2f", aiResponse.confidence())
+                    ));
+                }
+
+                job.complete(AnalysisJobStatus.DONE, null);
+            } else {
+                String errorMsg = aiResponse != null ? aiResponse.message() : "AI 서버 응답 없음";
+                job.complete(AnalysisJobStatus.FAILED, errorMsg);
+            }
         } catch (Exception e) {
             job.complete(AnalysisJobStatus.FAILED, "AI 서버 호출 실패: " + e.getMessage());
-            analysisJobRepository.save(job);
         }
 
-        return ApiResponse.ok(AnalysisJobResponse.from(job), "분석 요청이 접수되었습니다.");
+        analysisJobRepository.save(job);
+        return ApiResponse.ok(AnalysisJobResponse.from(job), "분석이 완료되었습니다.");
     }
 
     @GetMapping("/jobs")
@@ -119,6 +130,7 @@ public class AnalysisController {
         return ApiResponse.ok(AnalysisJobResponse.from(job));
     }
 
+    // AI 서버가 아닌 엣지 디바이스(CCTV/카메라)에서 직접 결과를 전송하는 경우 사용
     @PostMapping("/callback")
     public ApiResponse<Void> callback(@Valid @RequestBody AnalysisCallbackRequest request) {
         AnalysisJob job = analysisJobRepository.findById(request.jobId())
@@ -138,22 +150,37 @@ public class AnalysisController {
                     eventRequest.resultJson()
             ));
 
-            if (ABNORMAL_TYPES.contains(eventRequest.eventType())) {
-                String message = switch (eventRequest.eventType()) {
-                    case FALL -> "낙상이 감지되었습니다. severity=" + eventRequest.severity();
-                    case INTRUSION -> "침입이 감지되었습니다. severity=" + eventRequest.severity();
-                    case ANOMALOUS -> "이상행동이 감지되었습니다. severity=" + eventRequest.severity();
-                    default -> "비정상 행동이 감지되었습니다. severity=" + eventRequest.severity();
-                };
-                alertRepository.save(new Alert(event, job.getScenario().getUser(), message));
+            if (eventRequest.eventType() == DetectionEventType.ABNORMAL
+                    || eventRequest.eventType() == DetectionEventType.FALL
+                    || eventRequest.eventType() == DetectionEventType.INTRUSION
+                    || eventRequest.eventType() == DetectionEventType.ANOMALOUS) {
+                alertRepository.save(new Alert(
+                        event,
+                        job.getScenario().getUser(),
+                        "비정상 행동이 감지되었습니다. severity=" + eventRequest.severity()
+                ));
             }
         }
 
-        return ApiResponse.ok(null, "AI 분석 결과가 저장되었습니다.");
+        return ApiResponse.ok(null, "분석 결과가 저장되었습니다.");
     }
 
-    public record AnalysisJobRequest(Long scenarioId, Long videoSourceId) {
+    private Severity resolveSeverity(double confidence) {
+        if (confidence >= 0.9) return Severity.CRITICAL;
+        if (confidence >= 0.75) return Severity.HIGH;
+        if (confidence >= 0.5) return Severity.MEDIUM;
+        return Severity.LOW;
     }
+
+    public record AiPredictionResponse(
+            String prediction,
+            double confidence,
+            String source,
+            String status,
+            String message
+    ) {}
+
+    public record AnalysisJobRequest(Long scenarioId, Long videoSourceId) {}
 
     public record AnalysisJobResponse(
             Long id,
@@ -182,8 +209,7 @@ public class AnalysisController {
             AnalysisJobStatus status,
             String errorMessage,
             List<DetectionEventRequest> events
-    ) {
-    }
+    ) {}
 
     public record DetectionEventRequest(
             DetectionEventType eventType,
@@ -193,6 +219,5 @@ public class AnalysisController {
             String snapshotUrl,
             String clipUrl,
             String resultJson
-    ) {
-    }
+    ) {}
 }
